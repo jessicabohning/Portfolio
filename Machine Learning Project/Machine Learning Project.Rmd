@@ -1,0 +1,176 @@
+---
+title: 'Machine Learning Project: Using Sensor Data to Predict Body Position'
+output:
+  html_document:
+    keep_md: yes
+  pdf_document: default
+---
+
+## Getting and Cleaning the Data
+The goal of this project is to predict what particular bicep curl a person is making based on sensor data. The data can be found __[here](http://groupware.les.inf.puc-rio.br/har)__
+
+First, get the data. This does not be run everytime, so "eval" is set to FALSE until it is needed to run again
+
+```{r, cache=TRUE,eval=FALSE}
+url_training<-"https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+url_testing<-"https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+
+download.file(url_training,destfile="Training.csv")
+download.file(url_testing,destfile="Testing.csv")
+```
+
+Next, get the data into R and begin to explore the data. 
+
+```{r, cache=FALSE, warning=FALSE}
+#Load library
+suppressPackageStartupMessages(library(data.table))
+suppressPackageStartupMessages(library(ggplot2))
+suppressPackageStartupMessages(library(gridExtra))
+suppressPackageStartupMessages(library(randomForest))
+suppressPackageStartupMessages(library(parallel))
+suppressPackageStartupMessages(library(doParallel))
+suppressPackageStartupMessages(library(caret))
+
+training_raw<-read.csv("Training.csv",na.strings=c("NA","#DIV/0!",""))
+testing_raw<-read.csv("Testing.csv",na.strings=c("NA","#DIV/0!",""))
+```
+
+The dimensions of the training data are `r dim(training_raw)[1]` rows by `r dim(training_raw)[2]` columns. We are interested in predicting which activity or "classe" was performed by the user based on data collected by sensors. There are five classes (A,B,C,D,and E) based on performance of one set of 10 repetitions of the Unilateral Dumbbell Biceps Curl in five different fashions:
+
+A) Exactly according to the specification
+B) Throwing the elbows to the front
+C) Lifting the dumbbell only halfway
+D) Lowering the dumbbell only halfway
+E) Throwing the hips to the front
+
+Let's look at the data with NAs
+
+```{r}
+#Calculate How Many NAs there are in the training and testing sets. First 
+#combine the two data frames (which requires eliminating the last column)
+training_temporary<-training_raw[,1:159]
+testing_temporary<-testing_raw[,1:159]
+combineddf<-rbind(training_temporary,testing_temporary)
+na_count_original<-sapply(combineddf, function (x) sum(is.na(x)))
+na_count<-table(na_count_original)
+na_count<-as.data.frame(na_count)
+```
+
+We also found that out of `r dim(training_raw)[2]` columns, 
+`r dim(training_raw)[2]- na_count[1,2]` columns had NAs in them (with an average of `r format(mean(na_count_original[na_count_original!=0]),scientific=FALSE)` NAs in each). There are two ways to deal with NAs: 1) subsitute a new value in place of the NA (a blank or an interpolation of the data) or 2) ignore the columns with NAs. Because there are so many NAs in these columns, it would simplify the model to simply exclude these columns from the creation of the algorithm. 
+
+```{r, cache=TRUE}
+#Turn NA counts into data frames
+na_columns<-data.frame(na_count_original)
+#Set row names as a column
+na_columns<-setDT(na_columns, keep.rownames = TRUE)[]
+#Eliminate non-zero rows
+na_columns<-na_columns[na_columns$na_count_original==0,]
+training<-training_raw[ , which(names(training_raw) %in% na_columns$rn)]
+```
+
+Let's explore the data a little more. First eliminate the variables with zero covariates (variables that have very little variability and won't be good predictors). Then find ten variables with the largest frequency ratios and use this information to decide which variables to put into the model.
+
+```{r, cache=TRUE}
+nsv <- nearZeroVar(training,saveMetrics=TRUE)
+nsv_false<-nsv[nsv$zeroVar!=TRUE,]
+nsv_false<-nsv[nsv_false$nzv!=TRUE,]
+#Order the nsv_false data by frewRatio
+nsv_topten<-nsv_false[order(nsv_false$freqRatio,decreasing=TRUE),]
+#Grab the top ten
+nsv_topten<-nsv_topten[1:10,]
+#Make row names a column
+nsv_topten<-setDT(nsv_topten, keep.rownames = TRUE)[]
+nsv_topten
+```
+
+There were `r dim(nsv_false)[1]` variables that do not have zero covariates. The list above shows the variables with the most variation and which will be the easiest to fit a model to. The last three in the list have very small "freqRatios" and "percentUniques", so let's use only the first seven in the list for building the model (Note: with fewer variables the calculations performed will be fewer, making the algorithm quicker at future predictions).
+
+##Building the Model
+Before building the model, the data will be separated into training and testing data sets. The new "training" set will be used to create the machine learning model while the new "testing" set will be used to confirm if the model is accurate enough. 
+
+```{r, cache=TRUE}
+#Note: we are using the original training data and not the training data with nas removed
+set.seed(315)
+#First, create a training and testing data sets from the original training set
+inTrain <- createDataPartition(y=training_raw$classe,p=0.7, list=FALSE)
+training_data <- training_raw[inTrain,]
+testing_data <- training_raw[-inTrain,]
+```
+
+Now the model can be built using a Random Forest method and the clustering method outlined __[here](https://github.com/lgreski/datasciencectacontent/blob/master/markdown/pml-randomForestPerformance.md)__
+
+```{r, cache=TRUE, warning=FALSE}
+#Create partitions for cross validation
+set.seed(315)
+cluster <- makeCluster(detectCores() - 1) # convention to leave 1 core for OS
+registerDoParallel(cluster)
+fitControl <- trainControl(method = "cv",number = 10,allowParallel = TRUE)
+set.seed(315)
+#Now create the model from the training_data set
+modelFit<-train(classe~pitch_arm+pitch_forearm+roll_arm+yaw_arm+yaw_forearm+
+                    roll_forearm+pitch_dumbbell,data=training_data,method="rf",
+            trControl = fitControl)
+```
+
+##Evaluating the Effectiveness
+With the model built, let's look at its effectiveness. The model below provides a summary of the model. To cross-validate the data, the data was split into 10 partitions, or folds. Note: this was created in the previous code block with the "fitControl" step
+
+```{r,cache=TRUE}
+modelFit
+```
+
+
+Next let's look at the accuracy of the model and how important the variables were. 
+
+
+```{r, cache=TRUE}
+varImp(modelFit)
+pred<-predict(modelFit,testing_data)
+confusionMatrix(testing_data$classe,pred)$overall['Accuracy']
+```
+
+The accuracy of the model on the test data set is 
+`r round(confusionMatrix(testing_data$classe,pred)$overall['Accuracy'],3)`. This makes the out-of-sample error `r 1-round(confusionMatrix(testing_data$classe,pred)$overall['Accuracy'],3)`. This is acceptable enough, though the model accuracy could likely be improved by including every variable avaiable, but this would severely slow things down. 
+
+The varImp function shows that only the "pitch_arm" variable is not important to the model fit, and could be taken out to reduce computations.
+
+The graphs below show the confusion matrix in two ways (a confusion matrix highlights what the model correctly & incorrectly predicted in graphical form): the left one is the full confusion matrix and the right one is the same matrix but without the correct guesses shown (to highlight what was incorrect). This shows that there were very few wrong guesses made.
+
+```{r, cache=TRUE}
+confusionDF<-as.table(confusionMatrix(testing_data$classe,pred))
+confusionDF<-data.frame(confusionDF)
+## plot data
+p1<-ggplot(confusionDF,aes(Prediction, Reference))+
+        geom_tile(aes(fill=Freq))+
+        geom_text(aes(label=Freq))+
+        scale_fill_gradient(low="white",high = "red")+
+        theme(legend.position="none")
+#Create a data frame without the main diagnol of the confusion matrix to give a better glimpse at the errors
+confusionDF2<-confusionDF[confusionDF$Prediction!=confusionDF$Reference,]
+p2<-ggplot(confusionDF2,aes(Prediction, Reference))+
+        geom_tile(aes(fill=Freq))+
+        geom_text(aes(label=Freq))+
+        scale_fill_gradient(low="white",high = "red")+
+        theme(legend.position="none")
+grid.arrange(p1,p2,ncol=2, top="Confusion Matrix: How Correct Was The Prediction?")        
+```
+
+##Predictions
+The model can now be used to predict what position twenty users' arms moved to make their bicep curls. 
+
+Based on the model accuracy, I would expect that about `r round(confusionMatrix(testing_data$classe,pred)$overall['Accuracy']*20,1)` out of 20 of the predictions to be accurate.
+
+The table below takes in the dataset given for the testing scenario and predicts which of the five classes of bicep curl the user was using. 
+
+```{r, cache=TRUE}
+predictions<-predict(modelFit,testing_raw)
+data.frame(testing_raw$user_name,testing_raw$problem_id,predictions)
+```
+
+
+
+
+
+                
+                
