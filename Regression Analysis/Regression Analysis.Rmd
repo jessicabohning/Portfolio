@@ -1,0 +1,103 @@
+---
+title: "Relationship Between MPG and Transmission"
+author: "Jessica Bohning"
+date: "February 24, 2017"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+### Executive Summary
+This anlaysis seeks to answer the questions: 1) Is an automatic or manual transmission better for MPG?; and 2) Quantify the MPG difference between automatic and manual transmissions. It will be shown that a manual transmission is better for MPG than an automatic transmission and that the automatic transmission gets at least 3.91 mpg less 
+
+### Exploratory Analysis
+
+The following breaks what each variable referenced in this analysis stands for:
+
+Variable|Definition
+--------|---------
+mpg|miles/(US) gallon
+cyl|number of cylinders
+disp|displacement (cu.in.)
+hp|gross horsepower
+drat|rear axle ratio
+wt|weight (1000 lbs)
+qsec|0.25 mile time
+vs|V/S
+am|Transmission (0 = automatic, 1 = maunal)
+gear|number of forward gears
+carb|number of carburetors
+
+
+Before starting the data analysis, let's get a brief glimpse of the data using a boxplot. 
+
+```{r warning=FALSE, message=FALSE, fig.width=6, fig.height=4}
+library(UsingR)
+library(ggplot2)
+ggplot(mtcars,aes(as.character(mtcars$am),mtcars$mpg))+
+        geom_boxplot(lwd=0.25,fatten=0.25,outlier.size =0.25)+
+        labs(x="Automatic (0) or Manual (1) Transmission")+
+        labs(y="Miles per Gallon (mpg)")
+```
+
+This graph shows that the automatic tranmission (value of 0) gets lower gas mileage than a manual transmission (1). However, is the difference statistically significant? A t test should be able to determine if the means of the two sets of data is different. The null hypothesis is that the automatic (0) and manual (1) transmissions have the same mean MPG. The alternative hypothesis is that automatic transmissions have a smaller mean MPG than manual transmissions
+
+### Testing for Significance
+To test for statistical significance, separate the data into automatic and manual (automatic has an am value of 0 and manual has an am value of 1)
+
+```{r}
+automatic<-mtcars[mtcars$am==0,]
+manual<-mtcars[mtcars$am==1,]
+t.test(automatic$mpg,manual$mpg,alternative="less",paired=FALSE)
+```
+
+The confidence interval does not include 0, and the p-value is less than 0.05. Therefore the null hypothesis is rejected and we can conclude that manual transmissions get better gas mileage. The 95% confidence interval shows that the automatic transmissions has a mean MPG that is lower than the manual by negative infinity to -3.91 mpg. Obviously, in the context of the problem, the mean mpg can only be so large and cannot reach negative infinity. Using the max and min mpg of the data, the largest possible difference is `r max(mtcars$mpg)-min(mtcars$mpg) ` mpg
+
+Next, the difference between automatic and manual transmissions will be quantified. First, I will look at a summary of all of a linear model using all of the variables and then I will graph all of the other variables vs. mpg to get an idea of the trends. The graph can be found in the Appendix as Figure 1
+
+```{r}
+#Summary of linear model using all variables
+summary(lm(mpg~.,data=mtcars))
+```
+
+The summary table shows that "wt" is the most signicant variable on mpg (p-value of 0.063). From the graphs, cyl, disp and hp have an impact. There are multiple variabes that could be considered and so mutliple models will be looked at. I will add in the variables starting with transmission and then based on the p-value (from smallest to largest). Then an anova table will be created to determine which model might be best.
+
+```{r}
+fit1<-lm(mpg~am,mtcars) 
+fit2<-lm(mpg~am+wt,mtcars)
+fit3<-lm(mpg~am+wt+qsec,mtcars)
+fit4<-lm(mpg~am+wt+qsec+hp,mtcars)
+fit5<-lm(mpg~am+wt+qsec+hp+disp,mtcars)
+fit6<-lm(mpg~am+wt+qsec+hp+disp+drat,mtcars)
+fit7<-lm(mpg~am+wt+qsec+hp+disp+drat+gear,mtcars)
+fit8<-lm(mpg~am+wt+qsec+hp+disp+drat+gear+carb,mtcars)
+fit9<-lm(mpg~am+wt+qsec+hp+disp+drat+gear+carb+vs,mtcars)
+fit10<-lm(mpg~am+wt+qsec+hp+disp+drat+gear+carb+vs+cyl,mtcars)
+anova(fit1,fit2,fit3,fit4,fit5,fit6,fit7,fit8,fit9,fit10)
+```
+
+The table shows that the addition of each variable improves the model. Therefore, in selecting a linear model, you would pick fit10: the model with all of the variables. However, some of the later models only barely improve the model so if there is a limiting factor in how many variables could be picked, you'd at least want to used model 4, which gets the F value just above 1 and the Sum of Squares below 10. 
+
+Furthermore, Figure 2 in the Appendix shows that the residuals are randomly distributed and are approximately normally distributed. This means that Fit10 meets the conditions for linear modeling (independent data that is normally distributed). The following shows that fit10 has an $R^{2}$ value of 0.869 meaning that the model explains about 87% of the variance. 
+
+```{r}
+summary(fit10)
+```
+
+#Appendix
+###Figure 1
+```{r fig.width=6, fig.height=4}
+mtcars2<-mtcars[,-9]#We already know what the "am" data looks like
+par(mfrow=c(3,3),mar=c(4,4,2,1))
+for(i in 1:9){
+        plot(x=mtcars2[,i+1],y=mtcars$mpg,main=names(mtcars2[i+1]))}
+```
+
+###Figure 2
+```{r fig.width=6, fig.height=4}
+par(mfrow=c(2,2),mar=c(4,4,2,1));plot(fit10)
+```
